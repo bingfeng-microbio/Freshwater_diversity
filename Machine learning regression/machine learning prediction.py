@@ -11,7 +11,7 @@ with open('model_paths.txt', 'r') as file:
     target_identifiers = [line.strip() for line in file.readlines()]
 
 # Extract feature columns (assumed to be from the 3rd to 8th column)
-X_new = new_data.iloc[:, 2:8]
+X_new = new_data.iloc[:, 2:9]
 
 # Create output folder to store prediction results
 output_folder = 'predictions_2023'
@@ -36,3 +36,4 @@ for identifier in target_identifiers:
     print(f"Prediction completed for model {identifier}. Saved to {output_file}")
 
 print(f"All predictions completed! Results saved in the '{output_folder}' folder.")
+
