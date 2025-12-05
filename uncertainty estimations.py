@@ -1,104 +1,99 @@
 import os
-import pandas as pd
 import numpy as np
-from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestRegressor
-from joblib import dump
+import pandas as pd
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+from matplotlib import rcParams
+import matplotlib as mpl
+from matplotlib.colors import ListedColormap
 
-# Define paths
-model_save_path = 'RF_models'  # Directory to save trained Random Forest models
-global_feature_file = 'data_for_prediction.csv'  # Global feature dataset path
-tuning_results_file = 'hyperparameter_tuning.xlsx'  # Path to hyperparameter tuning results
-output_folder = "uncertainty_results"  # Output directory for results
+# Set global font to Arial
+rcParams['font.family'] = 'Arial'
 
-os.makedirs(model_save_path, exist_ok=True)
-os.makedirs(output_folder, exist_ok=True)
+# Define category color mapping
+categories = ["0", "1", "2", "3", "4"]
+category_colors = ["#CCCCCC", "#053061", "#7A90A5", "#C55258", "#6E0220"]  # Color corresponding to each category
+cmap = ListedColormap(category_colors)
 
-# Load global feature data
-global_data = pd.read_csv(global_feature_file)
-X_global = global_data.iloc[:, 2:]  # Feature columns (from the third column onward)
-coordinates = global_data.iloc[:, :2]  # Extract Longitude and Latitude columns
+def plot_maps(input_folder, output_folder):
+    """
+    Plot categorical data on a global map.
 
-# Load optimal hyperparameters
-tuning_results = pd.read_excel(tuning_results_file)
+    Parameters:
+        input_folder (str): Path to the input folder containing CSV files.
+        output_folder (str): Path to the output folder to save the maps.
+    """
+    # Ensure the output folder exists
+    if not os.path.exists(output_folder):
+        os.makedirs(output_folder)
 
-# List of target variables
-target_variables = [
-    "Shannon_bac", "Shannon_arc", "Shannon_euk", "Shannon_vir",
-    "BC_bac", "BC_arc", "BC_euk", "BC_vir"
-]
+    # Iterate over all CSV files in the input folder
+    for file_name in os.listdir(input_folder):
+        if file_name.endswith('.csv'):
+            file_path = os.path.join(input_folder, file_name)
+            print(f"Processing file: {file_path}")
 
-# Parameters for uncertainty analysis
-n_iterations = 1000  # Number of iterations using different random seeds
-random_seeds = np.random.randint(0, 10000, size=n_iterations)
+            # Read the CSV file
+            data = pd.read_csv(file_path, header=0, low_memory=False)
 
-# DataFrame to store normalized uncertainty across all target variables
-category_point_uncertainties = pd.DataFrame(coordinates)
+            # Verify required columns exist
+            if not all(col in data.columns for col in ['Longitude', 'Latitude', 'Hotspot_Count']):
+                raise ValueError("CSV file must contain 'Longitude', 'Latitude', and 'Hotspot_Count' columns.")
 
-# Loop over each target variable
-for target_variable in target_variables:
-    print(f"Processing target variable: {target_variable}")
+            # Extract longitude, latitude, and category values
+            lon = data['Longitude'].astype(float).to_numpy()
+            lat = data['Latitude'].astype(float).to_numpy()
+            category_values = data['Hotspot_Count'].astype(str).to_numpy()
 
-    # Retrieve best hyperparameters
-    best_params = tuning_results[tuning_results['Target Variable'] == target_variable]
-    if best_params.empty:
-        print(f"\tNo hyperparameters found for {target_variable}, skipping.")
-        continue
+            # Map category values to indices
+            category_indices = []
+            for cat in category_values:
+                try:
+                    category_indices.append(categories.index(cat))
+                except ValueError:
+                    category_indices.append(0)  # Default to "Others"
 
-    best_params = eval(best_params.iloc[0]['Best Parameters'])  # Convert string to dictionary
+            category_indices = np.array(category_indices)
 
-    # Remove any prefix from parameter names
-    adjusted_params = {key.split('__')[-1]: value for key, value in best_params.items()}
+            # Set plotting style
+            plt.style.use('ggplot')
+            plt.figure(figsize=(14, 9))
 
-    # Load training data
-    data = pd.read_excel('data_for_ML.xlsx')
-    X = data.iloc[:, 1:7]  # Select feature columns
-    y = data[target_variable]  # Select target variable
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.1, random_state=42)
+            # Initialize map projection
+            proj = ccrs.Robinson()
+            ax = plt.axes(projection=proj)
 
-    # Store predictions from each seed
-    global_predictions = []
+            # Add geographical features
+            ax.add_feature(cfeature.LAND, edgecolor='black', facecolor='#F0F0F0')  # Land
+            ax.add_feature(cfeature.COASTLINE, linewidth=1.5)  # Coastlines
+            ax.add_feature(cfeature.OCEAN, facecolor='white')  # Oceans
 
-    for seed in random_seeds:
-        np.random.seed(seed)
-        model = RandomForestRegressor(random_state=seed, **adjusted_params)
-        model.fit(X_train, y_train)
+            # Plot the categorical data as a scatter plot
+            sc = ax.scatter(lon, lat, c=category_indices, cmap=cmap, vmin=0, vmax=len(categories)-1,
+                            alpha=0.8, s=1, linewidths=0, marker='s',
+                            transform=ccrs.PlateCarree(), zorder=1)
 
-        # Save model to RF_models folder
-        model_filename = os.path.join(model_save_path, f"{target_variable}_seed_{seed}_model.pkl")
-        dump(model, model_filename)
-        print(f"\tModel saved: {model_filename}")
+            # Add colorbar
+            cbar = plt.colorbar(sc, ax=ax, orientation='vertical', pad=0.05, aspect=30)
+            cbar.set_label('Categories', fontsize=10)
+            cbar.ax.tick_params(labelsize=8)
 
-        # Predict on global dataset
-        predictions = model.predict(X_global)
-        global_predictions.append(predictions)
+            # Set category labels on the colorbar
+            cbar.set_ticks(range(len(categories)))
+            cbar.ax.set_yticklabels(categories)
 
-    # Convert list to NumPy array
-    global_predictions = np.array(global_predictions)
+            # Add title to the plot
+            ax.set_title(f"Categorical Map - {file_name}", fontsize=16, weight='bold')
 
-    # Compute interquartile range (75th - 25th percentile)
-    quantile_75 = np.percentile(global_predictions, 75, axis=0)
-    quantile_25 = np.percentile(global_predictions, 25, axis=0)
-    uncertainty_range = quantile_75 - quantile_25
+            # Save the map as high-resolution PNG
+            output_path = os.path.join(output_folder, f"{os.path.splitext(file_name)[0]}.png")
+            plt.savefig(output_path, format='png', dpi=600)
+            plt.close()
 
-    # Save uncertainty results for the current variable
-    results = pd.DataFrame({
-        'Longitude': coordinates['Longitude'],
-        'Latitude': coordinates['Latitude'],
-        'Quantile 75%': quantile_75,
-        'Quantile 25%': quantile_25,
-        'Uncertainty Range': uncertainty_range
-    })
+            print(f"Map saved to: {output_path}")
 
-    output_file = os.path.join(output_folder, f'{target_variable}_uncertainty.csv')
-    results.to_csv(output_file, index=False)
-    print(f"\tUncertainty analysis completed. Results saved to {output_file}")
-
-    # Normalize uncertainty range to 0–1 scale
-    normalized_uncertainty = (uncertainty_range - uncertainty_range.min()) / (uncertainty_range.max() - uncertainty_range.min())
-    category_point_uncertainties[f'{target_variable}_Normalized_Uncertainty'] = normalized_uncertainty
-
-# Save summary of normalized uncertainties at each location
-point_uncertainty_file = os.path.join(output_folder, "uncertainty_summary_normalized.csv")
-category_point_uncertainties.to_csv(point_uncertainty_file, index=False)
-print(f"Normalized uncertainty analysis completed. Summary saved to {point_uncertainty_file}")
+# Example usage
+input_folder = 'input'  # Input folder path
+output_folder = 'output'  # Output folder path
+plot_maps(input_folder, output_folder)
